@@ -1,4 +1,13 @@
+import pandas as pd
+import glob as glob
+import os
+from scipy.io import wavfile
+import numpy as np
+
 from datetime import timedelta
+import matplotlib
+
+matplotlib.use("Agg")  # Non-GUI backend
 import matplotlib.pyplot as plt
 import pandas as pd
 import os
@@ -6,18 +15,14 @@ import numpy as np
 import re
 from scipy.io import wavfile
 from scipy.signal import spectrogram
-from collections import defaultdict
 import glob
 from PIL import Image
+import tqdm
 
-"""
-preprocessing dor dldce 2013 dataset
-
-output file = .npy file, with entries X and y, where X is a (N, i, j) array amd y is a (N,) array
-where N is the number of samples, and i, j are the dimensions of the outputted spectrograms.  
-"""
-LABEL_MAPPING = {"Not_Detected": 0, "Detected": 1, "Possibly_Detected": 2}
-
+from typing import Dict, List
+import argparse
+from cetacean_detection.utils.config import Config
+import mlflow
 
 def get_detections_for_clip(detection_log_path, wav_filename):
     """
@@ -155,7 +160,7 @@ def create_labeled_intervals(
     return combined_df[["sample_start_time", "sample_end_time", "Detection_Confidence"]]
 
 
-def compute_spectrogram(data, sample_rate, start_time, end_time):
+def compute_spectrogram(data, sample_rate, start_time, end_time, config):
     # compute offsets
     start_offset = int(start_time * sample_rate)
     end_offset = int(end_time * sample_rate)
@@ -165,11 +170,11 @@ def compute_spectrogram(data, sample_rate, start_time, end_time):
     frequencies, times, Sxx = spectrogram(
         data_segment,
         fs=sample_rate,
-        window="hann",
-        nperseg=256,  # 128 ms window 0.128 * 2000 sr
-        noverlap=256 - 100,
+        window=config.window,
+        nperseg=config.nperseg,
+        noverlap=config.noverlap,
     )  # 50 ms advance 0.05 * 2000 sr
-    freq_mask = (frequencies >= 39.06) & (frequencies <= 357.56)
+    freq_mask = (frequencies >= config.ylim[0]) & (frequencies <= config.ylim[1])
     # limit freq
     frequencies = frequencies[freq_mask]
     Sxx = Sxx[freq_mask, :]
@@ -179,14 +184,14 @@ def compute_spectrogram(data, sample_rate, start_time, end_time):
     return frequencies, times, Sxx
 
 
-def generate_spectrogram_image(
-    times, frequencies, Sxx, figsize=(4, 4), dpi=100, shading="auto"
-):
+def generate_spectrogram_image(times, frequencies, Sxx, config):
     # Experimenting with saving a spectrogram as an image
     plt.clf()
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)  # Adjust size as needed
-    plt.pcolormesh(times, frequencies, Sxx, shading=shading)
-    plt.ylim(39.06, 357.56)  # Limit y-axis to Nyquist frequency
+    fig, ax = plt.subplots(
+        figsize=config.figsize, dpi=config.dpi
+    )  # Adjust size as needed
+    plt.pcolormesh(times, frequencies, Sxx, shading=config.shading)
+    plt.ylim(config.ylim[0], config.ylim[1])  # Limit y-axis to Nyquist frequency
     # Remove axes for clean image
     ax.set_axis_off()
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
@@ -194,45 +199,63 @@ def generate_spectrogram_image(
     fig.canvas.draw()
     image = np.array(fig.canvas.renderer.buffer_rgba())  # Convert to NumPy array
     image = np.array(Image.fromarray(image).convert("L"))  # grayscale
+    plt.close(fig)
+    plt.close("all")
     return image
 
 
-def generate_dataset(detection_log_path, wav_file, output_dir):
-    detections = get_detections_for_clip(detection_log_path, os.path.basename(wav_file))
+def generate_dataset(wav_file, config):
+    detections = get_detections_for_clip(
+        config.detection_log_path, os.path.basename(wav_file)
+    )
     labels = get_clip_time_delta_labels(detections, os.path.basename(wav_file))
     sample_rate, data = wavfile.read(wav_file)
     # make label dirs
-    samples = defaultdict(lambda: defaultdict(list))
     X, y = [], []
     for i, row in labels.iterrows():
         frequencies, times, Sxx = compute_spectrogram(
-            data, sample_rate, row["sample_start_time"], row["sample_end_time"]
+            data, sample_rate, row["sample_start_time"], row["sample_end_time"], config
         )
-        image = generate_spectrogram_image(times, frequencies, Sxx)
-        label = LABEL_MAPPING[row["Detection_Confidence"]]
+        image = generate_spectrogram_image(times, frequencies, Sxx, config)
+        label = config.label_mapping[row["Detection_Confidence"]]
 
         X.append(image)
         y.append(label)
     recording_name = os.path.basename(wav_file.split(".")[0])
-    img_filename = os.path.join(output_dir, "images", recording_name + ".npz")
+    img_filename = os.path.join(
+        output_dir, "images", recording_name + ".npz"
+    )
     np.savez(img_filename, X=X, y=y)
     return labels
 
 
-# Example usage:
-if __name__ == "__main__":
-    import tqdm
+class PreProcessConfig(Config):
+    detection_log_path: str
+    processed_output_dir: str
+    wav_dir: str
+    label_mapping: Dict[str, int]  # mapping for dataset labels to ints
+    figsize: List[int]  # fig size for generated spectrograms
+    ylim: List[float]  # ylim for plt plot
+    dpi: int  # dpi for generated spectrograms
+    shading: str  # shading param for generated spectrograms
+    window: str  # window for computing spectrogram
+    nperseg: int  # window
+    noverlap: int  # overlap window
 
-    detection_log_path = r"C:\Users\NoahB\OneDrive\Desktop\cetacean_detection\nefsc_sbnms_200903_nopp6_ch10\detections\NEFSC_SBNMS_200903_NOPP6_CH10_upcall-detection-log.csv"
-    # wav_file = r"C:\Users\NoahB\OneDrive\Desktop\cetacean_detection\nefsc_sbnms_200903_nopp6_ch10\source-audio\NOPP6_EST_20090328_000000_CH10.wav"
-    output_dir = r"C:\Users\NoahB\OneDrive\Desktop\cetacean_detection\nefsc_sbnms_200903_nopp6_ch10\processed"
-    wav_dir = r"C:\Users\NoahB\OneDrive\Desktop\cetacean_detection\nefsc_sbnms_200903_nopp6_ch10\source-audio"
-    wav_files = glob.glob(os.path.join(wav_dir, "*.wav"))
-    already_processed = [os.path.basename(x).split(".")[0] for x in glob.glob(os.path.join(output_dir, "images", "*.npz"))]
+def preprocess(config: PreProcessConfig) -> None:
+    """
+    access config using config.parameter
+    """
+    wav_files = glob.glob(os.path.join(config.wav_dir, "*.wav"))
+    output_dir = os.path.join(config.processed_output_dir, config.identifier_tag)
+    already_processed = [
+        os.path.basename(x).split(".")[0]
+        for x in glob.glob(os.path.join(output_dir, "images", "*.npz"))
+    ]
     wav_files = [f for f in wav_files if not any(a in f for a in already_processed)]
     labels_file = os.path.join(output_dir, "labels.csv")
     for wav_file in tqdm.tqdm(wav_files):
-        label_df = generate_dataset(detection_log_path, wav_file, output_dir)
+        label_df = generate_dataset(wav_file, config)
         if os.path.isfile(labels_file):
             label_df = pd.concat(
                 [pd.read_csv(labels_file).drop(columns=["Unnamed: 0"]), label_df]
@@ -240,3 +263,25 @@ if __name__ == "__main__":
             label_df.to_csv(labels_file)
         else:
             label_df.to_csv(labels_file)
+            
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Load configuration from YAML file")
+    parser.add_argument("--config", type=str, required=True, help="Path to the YAML config file")
+    
+    args = parser.parse_args()
+    
+    configs = Config.from_yaml(args.config)
+    preprocess_config: PreProcessConfig = configs.get("preprocessed_data", PreProcessConfig())
+    general_config = configs.get("general", Config())
+    # run preprocessing
+    preprocess(preprocess_config)
+    # log run to mlflow
+    mlflow.set_tracking_uri(general_config.mlflow_tracking_uri)
+    experiment_id = mlflow.get_experiment_by_name(general_config.experiment_name).experiment_id
+    with mlflow.start_run(experiment_id=experiment_id):
+        mlflow.log_params(preprocess_config)
+        mlflow.log_params(general_config)
+        mlflow.log_artifacts(preprocess_config.processed_output_dir)
+        mlflow.log_artifact(preprocess_config.processed_output_dir + "/labels.csv")
+        mlflow.end_run()
+    

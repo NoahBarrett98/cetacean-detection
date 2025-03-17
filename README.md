@@ -1,6 +1,6 @@
 # Dataset
 
-This project is playing around with an update version of the DLDCE 2013 workshop dataset, updated by NOAA to include all Baleen whale calls. To pull  the data set gcloud cli must be installed, use the command: 
+This project is playing around with an updated version of the DLDCE 2013 workshop dataset, updated by NOAA to include all Baleen whale calls. To pull  the data set gcloud cli must be installed, use the command: 
 
 ```
 gsutil -m cp -r \
