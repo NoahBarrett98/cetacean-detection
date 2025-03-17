@@ -22,3 +22,6 @@ class Config:
             configs[section] = cls.from_dict(values.get("config", {}))
         
         return configs
+class GeneralConfig(Config):
+    mlflow_server_uri: str
+    experiment_name: str

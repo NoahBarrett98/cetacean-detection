@@ -21,7 +21,7 @@ import tqdm
 
 from typing import Dict, List
 import argparse
-from cetacean_detection.utils.config import Config
+from cetacean_detection.utils.config import Config, GeneralConfig
 import mlflow
 
 def get_detections_for_clip(detection_log_path, wav_filename):
@@ -204,7 +204,7 @@ def generate_spectrogram_image(times, frequencies, Sxx, config):
     return image
 
 
-def generate_dataset(wav_file, config):
+def generate_dataset(wav_file, output_dir, config):
     detections = get_detections_for_clip(
         config.detection_log_path, os.path.basename(wav_file)
     )
@@ -241,13 +241,16 @@ class PreProcessConfig(Config):
     window: str  # window for computing spectrogram
     nperseg: int  # window
     noverlap: int  # overlap window
-
+    
 def preprocess(config: PreProcessConfig) -> None:
     """
     access config using config.parameter
     """
     wav_files = glob.glob(os.path.join(config.wav_dir, "*.wav"))
     output_dir = os.path.join(config.processed_output_dir, config.identifier_tag)
+    if not os.path.isdir(output_dir):
+        os.mkdir(output_dir)
+        os.mkdir(os.path.join(output_dir, 'images'))
     already_processed = [
         os.path.basename(x).split(".")[0]
         for x in glob.glob(os.path.join(output_dir, "images", "*.npz"))
@@ -255,7 +258,7 @@ def preprocess(config: PreProcessConfig) -> None:
     wav_files = [f for f in wav_files if not any(a in f for a in already_processed)]
     labels_file = os.path.join(output_dir, "labels.csv")
     for wav_file in tqdm.tqdm(wav_files):
-        label_df = generate_dataset(wav_file, config)
+        label_df = generate_dataset(wav_file, output_dir, config)
         if os.path.isfile(labels_file):
             label_df = pd.concat(
                 [pd.read_csv(labels_file).drop(columns=["Unnamed: 0"]), label_df]
@@ -271,17 +274,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     configs = Config.from_yaml(args.config)
-    preprocess_config: PreProcessConfig = configs.get("preprocessed_data", PreProcessConfig())
-    general_config = configs.get("general", Config())
+    preprocess_config: PreProcessConfig = configs.get("preprocess", PreProcessConfig())
+    general_config: GeneralConfig = configs.get("general", GeneralConfig())
     # run preprocessing
     preprocess(preprocess_config)
     # log run to mlflow
-    mlflow.set_tracking_uri(general_config.mlflow_tracking_uri)
-    experiment_id = mlflow.get_experiment_by_name(general_config.experiment_name).experiment_id
-    with mlflow.start_run(experiment_id=experiment_id):
-        mlflow.log_params(preprocess_config)
-        mlflow.log_params(general_config)
-        mlflow.log_artifacts(preprocess_config.processed_output_dir)
-        mlflow.log_artifact(preprocess_config.processed_output_dir + "/labels.csv")
+    mlflow.set_tracking_uri(general_config.mlflow_server_uri)
+    mlflow.set_experiment(general_config.experiment_name)
+    experiment = mlflow.get_experiment_by_name(general_config.experiment_name)
+    with mlflow.start_run(experiment_id=experiment.experiment_id):
+        mlflow.log_params(preprocess_config.__dict__)
+        mlflow.log_params(general_config.__dict__)
         mlflow.end_run()
     

@@ -1,11 +1,12 @@
 general:
-  mlflow_server_uri: "http://localhost:5000"
-  experiment_name: "cetacean_detection"
-preprocessed_data:
+  config:
+    mlflow_server_uri: "http://localhost:2000"
+    experiment_name: "cetacean_detection"
+preprocess:
   config:
     detection_log_path: "C:/Users/NoahB/OneDrive/Desktop/cetacean_detection/nefsc_sbnms_200903_nopp6_ch10/detections/NEFSC_SBNMS_200903_NOPP6_CH10_upcall-detection-log.csv"
     processed_output_dir: "C:/Users/NoahB/OneDrive/Desktop/cetacean_detection/nefsc_sbnms_200903_nopp6_ch10/processed"
-    identifier_tag: "intial_run"
+    identifier_tag: "intial_run_0"
     wav_dir: "C:/Users/NoahB/OneDrive/Desktop/cetacean_detection/nefsc_sbnms_200903_nopp6_ch10/source-audio"
     label_mapping: {"Not_Detected": 0, "Detected": 1, "Possibly_Detected": 2}
     figsize: [4, 4]
