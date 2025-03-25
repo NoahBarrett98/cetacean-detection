@@ -6,7 +6,12 @@ from typing import Tuple
 from torch.utils.data import DataLoader
 from cetacean_detection.src.data_loader import get_data_loaders
 from cetacean_detection.src.models import get_model
+from cetacean_detection.utils.config import flatten_dict
 import mlflow
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 
 def train_step(pbar, train_loader, val_loader, optimizer, model, criterion, scheduler):
     running_loss = 0.0
@@ -94,20 +99,25 @@ def model_trainer(config: dict):
     general model trainer entry function
     """
     # log run to mlflow
+    logging.info("starting mlflow run")
     mlflow.set_tracking_uri(config["general"]["mlflow_server_uri"])
     mlflow.set_experiment(config["general"]["experiment_name"])
     experiment = mlflow.get_experiment_by_name(config["general"]["experiment_name"])
     with mlflow.start_run(experiment_id=experiment.experiment_id):
-        for v in config.values():
-            mlflow.log_params(v)
+        logging.info("logging config")
         
+        flat_config = flatten_dict(config)
+        mlflow.log_params(flat_config)
         # preloaded data to prevent reloading
+        logging.info("getting data loaders")
         data_loaders = get_data_loaders(config.get("data_loader"))
         
         # load model
+        logging.info("getting model")
         model = get_model(config.get("model"))
         
         # run pipeline
+        logging.info("running training pipeline")
         run_training_pipeline(data_loaders, model, config.get("model_trainer"))
 
 if __name__ == "__main__":

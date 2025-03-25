@@ -1,5 +1,5 @@
 general:
-  mlflow_server_uri: "http://localhost:2000"
+  mlflow_server_uri: "http://127.0.0.1:2000"
   experiment_name: "cetacean_detection"
 
 preprocess:
@@ -43,7 +43,7 @@ model:
 
 
 model_trainer:
-  entry_function: "ast_model_trainer"
+  entry_function: "train_classification"
   config:
     optimizer: "SGD"
     num_epochs: 1
