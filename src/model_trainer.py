@@ -1,4 +1,8 @@
 import torch
+import torch.profiler
+from torch.cuda.amp import autocast, GradScaler
+from peft import LoraConfig, get_peft_model
+torch.backends.cudnn.benchmark = True
 import tqdm
 from cetacean_detection.src.evaluator import evaluate_classification
 from cetacean_detection.src import optimizers
@@ -9,41 +13,54 @@ from cetacean_detection.src.models import get_model
 from cetacean_detection.utils.config import flatten_dict
 import mlflow
 import logging
+import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
 def train_step(pbar, train_loader, val_loader, optimizer, model, criterion, scheduler):
     running_loss = 0.0
-    for i, (inputs, labels) in enumerate(train_loader, 0):
+    scaler = GradScaler()
+    
+    for i, (inputs, labels) in tqdm.tqdm(enumerate(train_loader, 0)):
         # put on gpu
-        inputs, labels = inputs, labels
+        inputs, labels = inputs.cuda(), labels.cuda()
         optimizer.zero_grad()
-        outputs = torch.nn.functional.softmax(model(inputs), dim=1)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        # Enable autocast for mixed precision
+        with autocast():
+            outputs = torch.nn.functional.softmax(model(inputs), dim=1)
+            loss = criterion(outputs, labels)
+
+        # Use GradScaler to scale the loss and call backward
+        scaler.scale(loss).backward()
+
+        # Step the optimizer with scaled gradients
+        scaler.step(optimizer)
+        scaler.update()
         running_loss += loss.item()
     if scheduler:
         scheduler.step()
+    torch.save(model, "C:/Users/NoahB/OneDrive/Desktop/cetacean_detection/experiments/run_0/model.pt")
     # get validation loss #
     with torch.no_grad():
         val_running_loss = 0.0
-        for inputs, labels in val_loader, 0:
-            inputs, labels = inputs, labels
+        for i, (inputs, labels) in enumerate(val_loader, 0):
+            inputs, labels = inputs.cuda(), labels.cuda()
             # outputs = model(inputs)
-            outputs = torch.nn.functional.softmax(model(inputs), dim=1)
-            loss = criterion(outputs, labels)
+            with autocast():
+                outputs = torch.nn.functional.softmax(model(inputs), dim=1)
+                loss = criterion(outputs, labels)
             val_running_loss += loss.item()
+
     pbar.set_description(f"Loss: {running_loss / len(train_loader):.6f}")
     print(f"running loss: {running_loss}")
-    train_results = evaluate_classification(
-        model, train_loader
-    )
+    # train_results = evaluate_classification(
+    #     model, train_loader
+    # )
     val_results = evaluate_classification(
         model, val_loader
     )
-    return train_results, val_results, running_loss, val_running_loss
+    return val_results, running_loss, val_running_loss
         
 def train_classification(data_loaders, model, config: dict) -> Tuple[float, float, torch.nn.Module]:
     """main training function for classification
@@ -65,13 +82,21 @@ def train_classification(data_loaders, model, config: dict) -> Tuple[float, floa
     criterion = torch.nn.CrossEntropyLoss()
     # training
     for epoch in pbar:
-        train_results, val_results, running_loss, val_running_loss =train_step(pbar, train_loader, val_loader, optimizer, model, criterion, scheduler)
-        mlflow.log_param("loss/train", running_loss / len(train_loader))
-        mlflow.log_param("accuracy/train", train_results["accuracy"])
-        mlflow.log_param("auc/train", train_results["auc"])
-        mlflow.log_param("loss/val", val_running_loss / len(val_loader))
-        mlflow.log_param("accuracy/val", val_results["accuracy"])
-        mlflow.log_param("auc/val", val_results["auc"])
+        val_results, running_loss, val_running_loss = train_step(pbar, train_loader, val_loader, optimizer, model, criterion, scheduler)
+        
+        logs = {
+            "loss/train": running_loss / len(train_loader),
+            "loss/val": val_running_loss / len(val_loader),
+            "accuracy/val": val_results["accuracy"], 
+
+        }
+        mlflow.log_metrics(logs, step=epoch)
+        # mlflow.log_param("loss/train", running_loss / len(train_loader))
+        # mlflow.log_param("accuracy/train", train_results["accuracy"])
+        # mlflow.log_param("auc/train", train_results["auc"])
+        # mlflow.log_param("loss/val", val_running_loss / len(val_loader))
+        # mlflow.log_param("accuracy/val", val_results["accuracy"])
+        # mlflow.log_param("auc/val", val_results["auc"])
     
     # evaluate model
     test_eval_results = evaluate_classification(model, test_loader)
@@ -114,8 +139,13 @@ def model_trainer(config: dict):
         
         # load model
         logging.info("getting model")
-        model = get_model(config.get("model"))
-        
+        model = get_model(config.get("model")).cuda().half() # use float 16 to benefit from mixed precision
+
+        lora_config = LoraConfig(
+            **config["model_trainer"]["config"]["LoRA_kwargs"]
+        )
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
         # run pipeline
         logging.info("running training pipeline")
         run_training_pipeline(data_loaders, model, config.get("model_trainer"))

@@ -7,23 +7,25 @@ preprocess:
   processed_output_dir: "C:/Users/NoahB/OneDrive/Desktop/cetacean_detection/nefsc_sbnms_200903_nopp6_ch10/processed"
   identifier_tag: "intial_run_0"
   wav_dir: "C:/Users/NoahB/OneDrive/Desktop/cetacean_detection/nefsc_sbnms_200903_nopp6_ch10/source-audio"
-  label_mapping: {"Not_Detected": 0, "Detected": 1, "Possibly_Detected": 2}
+  label_mapping: { "Not_Detected": 0, "Detected": 1, "Possibly_Detected": 2 }
   figsize: [4, 4]
   ylim: [39.06, 357.56]
   dpi: 100
   shading: "auto"
   window: "hann"
-  nperseg: 256  # 128 ms window 0.128 * 2000 sr
+  nperseg: 256 # 128 ms window 0.128 * 2000 sr
   noverlap: 156 # 256 - 100
 
 data_loader:
   entry_function: "get_hdf5_data_loaders"
   config:
-    hdf5_file: "C:/Users/NoahB/OneDrive/Desktop/cetacean_detection/nefsc_sbnms_200903_nopp6_ch10/processed/intial_run/hdf5/processed_data.h5"
+    hdf5_file: "C:/Users/NoahB/OneDrive/Desktop/cetacean_detection/nefsc_sbnms_200903_nopp6_ch10/processed/intial_run/hdf5/processed_data_no_class_2.h5"
+    label_mapping: { "Not_Detected": 0, "Detected": 1 }
+    include_classes: [0, 1]
     train_ratio: 0.7
-    val_ratio: 0.15 
-    test_ratio: 0.15 
-    batch_size: 32 
+    val_ratio: 0.15
+    test_ratio: 0.15
+    batch_size: 8
     transform: None
     random_seed: 42
 model:
@@ -33,20 +35,25 @@ model:
     AST_kwargs:
       label_dim: 2
       fstride: 10
-      tstride: 10 
-      input_fdim: 400 
-      input_tdim: 400 
+      tstride: 10
+      input_fdim: 400
+      input_tdim: 400
       imagenet_pretrain: true
       audioset_pretrain: false
-      model_size: 'tiny224'
+      model_size: "tiny224"
       verbose: true
-
 
 model_trainer:
   entry_function: "train_classification"
   config:
     optimizer: "SGD"
-    num_epochs: 1
+    num_epochs: 20
     use_scheduler: true
     lr: 0.001
-    
+    LoRA_kwargs:
+      r: 16
+      lora_alpha: 16
+      target_modules: ["qkv"]
+      lora_dropout: 0.1
+      bias: "none"
+      modules_to_save: ["classifier"]

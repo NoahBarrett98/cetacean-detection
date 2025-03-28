@@ -3,11 +3,9 @@ Torch Dataset Def.
 """
 import h5py
 import torch
-import sys
-from typing import Tuple, Union
-from torch.utils.data import Dataset, Subset, DataLoader
+from typing import Tuple
+from torch.utils.data import Dataset, Subset, DataLoader, WeightedRandomSampler
 import numpy as np
-from cetacean_detection.utils.config import DataLoaderConfig
 
 class HDF5Dataset(Dataset):
     def __init__(self, hdf5_file, transform=None):
@@ -25,6 +23,10 @@ class HDF5Dataset(Dataset):
 
     def __len__(self):
         return self.data_len
+    
+    def get_labels(self):
+        with h5py.File(self.hdf5_file, 'r') as f:
+            return f['y'][:]
 
     def __getitem__(self, index):
         # Open HDF5 within __getitem__ for multiprocessing support
@@ -36,6 +38,39 @@ class HDF5Dataset(Dataset):
         X = torch.tensor(X, dtype=torch.float32)
         y = torch.tensor(y, dtype=torch.long)
         return X, y
+    
+
+def create_weighted_sampler(dataset):
+    # Ensure labels are numpy array if not already
+    labels = []
+    for idx in dataset.indices:
+        # Assumes dataset returns (data, label) tuple
+        _, label = dataset.dataset[idx]
+        labels.append(label)
+    labels = np.array(labels)
+    
+    # Calculate class weights
+    class_counts = np.bincount(labels)
+    
+    # Prevent division by zero
+    class_weights = np.zeros_like(class_counts, dtype=float)
+    non_zero_counts = class_counts > 0
+    class_weights[non_zero_counts] = 1.0 / class_counts[non_zero_counts]
+    
+    # Create sample weights for each label
+    sample_weights = class_weights[labels]
+    # Convert to torch tensor
+    sample_weights = torch.tensor(sample_weights, dtype=torch.float)
+    
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True
+    )
+    return sampler
+    
+
+
 
 def get_hdf5_data_loaders(config: dict) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """
@@ -73,15 +108,18 @@ def get_hdf5_data_loaders(config: dict) -> Tuple[DataLoader, DataLoader, DataLoa
     train_indices = indices[:train_size]
     val_indices = indices[train_size:train_size + val_size]
     test_indices = indices[train_size + val_size:]
+    import pdb;pdb.set_trace()
     # Create subsets
     train_dataset = Subset(full_dataset, train_indices)
     val_dataset = Subset(full_dataset, val_indices)
     test_dataset = Subset(full_dataset, test_indices)
+    # balanced sampling
+    sampler = create_weighted_sampler(train_dataset)
     
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=config["batch_size"], shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], sampler=sampler, num_workers=8, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=8, pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=8, pin_memory=True)
     
     return train_loader, val_loader, test_loader
 
